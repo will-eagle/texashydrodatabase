@@ -1,0 +1,9 @@
+name: radon-db
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  - pandas
+  - python-dateutil
+  - pip
+  - tzdata
