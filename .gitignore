@@ -5,3 +5,5 @@ logs
 SQL/texashydro.db
 Python/embed
 submissions
+__pycache__/
+*.pyc

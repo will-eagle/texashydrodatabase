@@ -120,8 +120,19 @@ CREATE TABLE field_measurements (
 CREATE INDEX idx_fm_visit ON field_measurements(visit_id);
 CREATE INDEX idx_fm_parameter ON field_measurements(parameter);
 
--- ============================================================
 -- Radon: analyses and cycles
+--
+-- Uncertainty convention: all radon/thoron uncertainty columns are 2-SIGMA,
+-- matching the Durridge Capture export ("... 2-Sigma Uncert. [pCi/L]").
+--
+-- Concentration convention: for a water protocol (WAT40/WAT250) the RAD8 reports
+-- the SAMPLE WATER concentration directly -- internally it multiplies the air-loop
+-- reading by a fixed, sample-volume-dependent conversion coefficient (2.82 for
+-- 250 mL, 17.9 for 40 mL). So avg_rn_pcil / rn_pcil already hold radon-in-water
+-- (= Capture "Radon Concentration", which matches "Radon In Water Concentration"
+-- to rounding; both are the water phase). corrected_rn_pcil is reserved for
+-- post-hoc corrections such as decay-correction back to collection time (see
+-- holding_time_hours); NULL at ingest.
 -- ============================================================
 CREATE TABLE radon_analyses (
     analysis_id             TEXT NOT NULL PRIMARY KEY,                    -- 'BCR_01_20261202_radon_T1'
@@ -130,42 +141,45 @@ CREATE TABLE radon_analyses (
     test_number             INTEGER DEFAULT 1,
     protocol                TEXT, --'WAT40, WAT250'
     datetime_analysis_utc   TEXT NOT NULL,
-    holding_time_days       REAL,
-    avg_rn_pcil             REAL,
-    avg_rn_unc              REAL,
-    corrected_rn_pcil       REAL,
+    holding_time_hours      REAL,
+    avg_rn_pcil             REAL,                           -- mean radon-in-water over used cycles (RAD8 already applied the sample-volume coefficient)
+    avg_rn_unc_2s           REAL,                           -- 2-sigma; propagated from per-cycle 2-sigma counting uncertainties
+    corrected_rn_pcil       REAL,                           -- decay-corrected-to-collection radon-in-water (downstream; uses holding_time_hours); NULL at ingest
     avg_thoron_pcil         REAL,
-    avg_thoron_unc          REAL,
+    avg_thoron_unc_2s       REAL,                           -- 2-sigma
     n_cycles                INTEGER DEFAULT 4,
     n_cycles_flagged        INTEGER,
     personnel               TEXT,
     source_file             TEXT NOT NULL,
     source_sha256           TEXT NOT NULL UNIQUE,
-    config_json             TEXT,                           -- dataConfigurationSetters blob
+    config_json             TEXT,                           -- dataConfigurationSetters + embeddedRAD8Profile + setup blob
     qc_flag                 TEXT DEFAULT 'ok',
     notes                   TEXT,
     ingested_utc            TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX idx_radon_analyses_sample ON radon_analyses(sample_id);
 CREATE INDEX idx_radon_analyses_datetime ON radon_analyses(datetime_analysis_utc);
-
+ 
 CREATE TABLE radon_cycles (
     cycle_id        INTEGER PRIMARY KEY AUTOINCREMENT,
     analysis_id     TEXT NOT NULL REFERENCES radon_analyses(analysis_id),
     cycle_no        INTEGER NOT NULL,
-    cycle_utc       TEXT NOT NULL,
+    cycle_utc       TEXT NOT NULL,      -- cycle START (from .rd8 Date_Time epoch, UTC). NB: Capture CSV labels rows by the cycle END = start + cycle_length_s
     cycle_length_s  INTEGER,
-    humidity_pct    REAL,
-    temp_d_c        REAL,
-    temp_a_c        REAL,
+    humidity_pct    REAL,               -- relative humidity (%)
+    temp_d_c        REAL,               -- air temperature, digital probe (deg C)
+    temp_a_c        REAL,               -- air temperature, analog probe (deg C)
     barometer_mb    REAL,
-    total_counts    TEXT,               -- hex string like '0x0000000000000105'
+    baro_temp_c     REAL,               -- barometer temperature (deg C)
+    hv_counts       INTEGER,            -- high-voltage counts (instrument health / QC)
+    pump_current_ma REAL,               -- pump current (mA) (instrument health / QC)
+    total_counts    TEXT,               -- hex string like '0x0000000000000105' (equals decimal 'Total Counts')
     cpm             REAL,
-    mode            TEXT,               -- 'R', 'N', 'S'
-    rn_pcil         REAL,
-    rn_unc          REAL,
+    mode            TEXT,               -- 'R' (Rapid), 'N' (Normal), 'S' (Sniff)
+    rn_pcil         REAL,               -- radon-in-water reported by RAD8 (air-loop x sample-volume coefficient) = Capture 'Radon Concentration'
+    rn_unc_2s       REAL,               -- 2-sigma
     thoron_pcil     REAL,
-    thoron_unc      REAL,
+    thoron_unc_2s   REAL,               -- 2-sigma
     spectrum_b64    TEXT,
     qc_flag         TEXT DEFAULT 'ok',
     qc_notes        TEXT,
@@ -173,3 +187,4 @@ CREATE TABLE radon_cycles (
 );
 CREATE INDEX idx_radon_cycles_analysis ON radon_cycles(analysis_id);
 CREATE INDEX idx_radon_cycles_utc ON radon_cycles(cycle_utc);
+ 
